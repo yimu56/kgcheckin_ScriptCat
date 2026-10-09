@@ -1,0 +1,31 @@
+{
+  "name": "kgcheckin-scriptcat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "酷狗概念版 VIP 自动签到 · ScriptCat（脚本猫）定时脚本",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node test/run-all.js",
+    "test:crypto": "node test/crypto.test.js",
+    "test:qr": "node test/qr.test.js",
+    "test:notify": "node test/notify.test.js",
+    "test:gm": "node test/gm.test.js",
+    "test:live": "node test/live.test.js",
+    "test:sign": "node test/sign.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yimu56/kgcheckin_ScriptCat.git"
+  },
+  "keywords": [
+    "scriptcat",
+    "userscript",
+    "kugou",
+    "checkin"
+  ],
+  "author": "yimu56",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16"
+  }
+}

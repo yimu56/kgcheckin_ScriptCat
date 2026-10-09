@@ -1,0 +1,8 @@
+node_modules/
+
+# 二维码参考数据的中间产物（由 test/qr-reference.gen.js 临时生成）
+test/.qr-*.json
+
+*.log
+.DS_Store
+Thumbs.db
