@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         酷狗概念版 VIP 自动签到（ScriptCat 定时版）
 // @namespace    https://github.com/yimu56
-// @version      1.0.0
+// @version      1.0.1
 // @description  每天自动领取酷狗概念版 VIP：支持扫码 / 手机号 / 手动三种登录，支持系统通知与多渠道推送，零外部依赖
 // @author       yimu56
 // @license      MIT
@@ -47,12 +47,12 @@
 登录:
   KG_PHONE:
     title: 手机号
-    description: '手机号登录用。填好后执行菜单「② 发送短信验证码」，收到短信再把验证码填到下面'
+    description: '手机号登录用的号码，填 11 位数字。填在这里最省事；如果菜单能弹出输入框，也可以直接在框里输'
     type: text
     default: ''
   KG_CODE:
     title: 短信验证码
-    description: '收到验证码后填这里，再执行菜单「③ 手机号登录」完成登录'
+    description: '收到短信后填这里，再点菜单「③ 手机号登录」。菜单能弹输入框时也可直接在框里输，两种都行'
     type: text
     default: ''
   KG_QR_SECONDS:
@@ -252,6 +252,13 @@ return (function () {
     return chars.slice(0, 3).join('') + '***' + chars.slice(-2).join('');
   }
 
+  /** 手机号脱敏：13*******00（比通用的 maskIdentifier 更严，只露前 2 后 2） */
+  function maskPhone(value) {
+    var s = String(value === undefined || value === null ? '' : value).replace(/\D/g, '');
+    if (s.length < 7) return maskIdentifier(value);
+    return s.slice(0, 2) + '*'.repeat(s.length - 4) + s.slice(-2);
+  }
+
   function sanitizeString(value) {
     return String(value)
       .replace(/(github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,})/g, '[REDACTED]')
@@ -298,8 +305,30 @@ return (function () {
       ['status', 'code', 'error_code', 'errcode', 'msg', 'message', 'nickname', 'userid'].forEach(function (key) {
         if (safe.data[key] !== undefined) summary.data[key] = safe.data[key];
       });
+    } else if (typeof safe.data === 'string' || typeof safe.data === 'number') {
+      // 酷狗失败时经常把原因直接放在 data 里（例如 "验证码过期"），别丢掉
+      summary.data = safe.data;
     }
     return Object.keys(summary).length ? summary : safe;
+  }
+
+  /** 酷狗登录相关错误码 → 人话 */
+  var KG_ERROR_TEXT = {
+    20006: '参数错误，请求被服务端拒绝',
+    20020: '验证码错误或已过期，请重新执行「② 发送短信验证码」',
+    20021: '验证码错误或已过期，请重新执行「② 发送短信验证码」',
+    34175: '该手机号绑定了多个账号，只能用扫码登录',
+  };
+
+  /** 从响应里提取一句可读的失败原因 */
+  function errorTextOf(res) {
+    if (!res || typeof res !== 'object') return '';
+    var code = res.error_code !== undefined ? res.error_code : res.errcode;
+    if (code !== undefined && KG_ERROR_TEXT[code]) return KG_ERROR_TEXT[code];
+    if (typeof res.data === 'string' && res.data) return res.data;
+    if (typeof res.msg === 'string' && res.msg) return res.msg;
+    if (typeof res.message === 'string' && res.message) return res.message;
+    return '';
   }
 
   /* ================================================================== *
@@ -1726,6 +1755,7 @@ return (function () {
 
   var KEY_SNAPSHOT = 'kg_userinfo_snapshot';
   var KEY_SYNC = 'kg_userinfo_sync';
+  var KEY_PHONE = 'kg_phone';
 
   function gmSet(key, value) {
     var set = GM('GM_setValue');
@@ -2192,24 +2222,72 @@ return (function () {
     return loggedIn;
   }
 
-  async function sendSmsCode() {
-    var phone = cfgStr('登录.KG_PHONE').trim();
-    if (!phone) throw new Error('请先在脚本配置里填写「手机号」');
-    var sent = await callApi('captcha_sent', { mobile: phone });
-    if (sent && sent.status === 1) {
-      log('[成功] 验证码已发送到 ' + maskIdentifier(phone) + '，请查收短信');
-      log('[提示] 把验证码填到脚本配置的「短信验证码」里，再执行菜单「③ 手机号登录」');
-      return true;
-    }
-    log('[失败] 验证码发送失败：' + JSON.stringify(summarizeResponse(sent)));
-    throw new Error('验证码发送失败');
+  /** 手机号从哪儿来的（依次：菜单输入框 → 上次用过的 → 脚本配置） */
+  function resolvePhone(phoneArg) {
+    var fromInput = String(phoneArg === undefined || phoneArg === null ? '' : phoneArg).trim();
+    var remembered = String(gmGet(KEY_PHONE, '') || '').trim();
+    var fromConfig = String(cfgStr('登录.KG_PHONE') || '').trim();
+    if (fromInput) return { phone: fromInput, source: '菜单输入框' };
+    if (remembered) return { phone: remembered, source: '上次用过的手机号' };
+    if (fromConfig) return { phone: fromConfig, source: '脚本配置' };
+    return { phone: '', source: '无' };
   }
 
-  async function phoneLogin() {
-    var phone = cfgStr('登录.KG_PHONE').trim();
-    var code = cfgStr('登录.KG_CODE').trim();
-    if (!phone) throw new Error('请先在脚本配置里填写「手机号」');
-    if (!code) throw new Error('请先在脚本配置里填写「短信验证码」，或先执行菜单「② 发送短信验证码」');
+  /**
+   * 发送短信验证码。
+   * @param {string} [phoneArg] 手机号；不传则依次取「上次用过的手机号」→「配置里的手机号」
+   */
+  async function sendSmsCode(phoneArg) {
+    var resolved = resolvePhone(phoneArg);
+    var phone = resolved.phone;
+
+    if (!phone) {
+      log('[失败] 没拿到手机号：菜单输入框、上次记录、脚本配置里都是空的');
+      throw new Error(
+        '没填手机号。两种填法任选：① 菜单弹出输入框时，在框里填 11 位手机号；' +
+        '② 打开脚本配置 →「登录」组 → 填「手机号」→ 保存后重新点这个菜单'
+      );
+    }
+    log('[信息] 本次使用手机号 ' + maskPhone(phone) + '（来源：' + resolved.source + '）');
+
+    if (!/^1\d{10}$/.test(phone)) {
+      throw new Error('手机号格式不对（应该是 11 位数字）：' + maskPhone(phone));
+    }
+
+    var sent = await callApi('captcha_sent', { mobile: phone });
+    if (sent && sent.status === 1) {
+      // 只记在脚本自己的存储里，不动用户的配置
+      gmSet(KEY_PHONE, phone);
+      log('[成功] 验证码已发送到 ' + maskPhone(phone) + '，请查收短信');
+      log('[提示] 验证码只有几分钟有效期，收到后请尽快执行菜单「③ 手机号登录」');
+      return true;
+    }
+    var hint = errorTextOf(sent);
+    log('[失败] 验证码发送失败：' + JSON.stringify(summarizeResponse(sent)));
+    throw new Error('验证码发送失败' + (hint ? '：' + hint : ''));
+  }
+
+  /**
+   * 手机号 + 验证码登录。
+   * @param {string} [codeArg] 验证码；不传则取配置里的「短信验证码」
+   * @param {string} [phoneArg] 手机号；不传则依次取「上次用过的手机号」→「配置里的手机号」
+   */
+  async function phoneLogin(codeArg, phoneArg) {
+    var resolved = resolvePhone(phoneArg);
+    var phone = resolved.phone;
+    var fromInput = String(codeArg === undefined || codeArg === null ? '' : codeArg).trim();
+    var fromConfig = String(cfgStr('登录.KG_CODE') || '').trim();
+    var code = fromInput || fromConfig;
+
+    if (!phone) {
+      log('[失败] 没拿到手机号（来源：' + resolved.source + '）');
+      throw new Error('不知道用哪个手机号登录：请先执行菜单「② 发送短信验证码」把手机号填一次');
+    }
+    if (!code) {
+      log('[失败] 没拿到验证码：菜单输入框和脚本配置里都是空的');
+      throw new Error('没填验证码。两种填法任选：① 菜单弹出输入框时，在框里填收到的验证码；② 到脚本配置的「登录 → 短信验证码」里填上');
+    }
+    log('[信息] 本次使用手机号 ' + maskPhone(phone) + '（来源：' + resolved.source + '），验证码来源：' + (fromInput ? '菜单输入框' : '脚本配置'));
 
     var result = await callApi('login_cellphone', { mobile: phone, code: code });
     if (result && result.status === 1 && result.data && result.data.token) {
@@ -2220,22 +2298,24 @@ return (function () {
       log('[成功] 登录成功！账号已保存，当前共 ' + list.length + ' 个账号');
       return true;
     }
-    if (result && result.error_code === 34175) {
-      throw new Error('该手机号绑定了多个账号，暂不支持手机登录，请改用扫码登录');
-    }
+
+    var hint = errorTextOf(result);
     log('[失败] 登录失败：' + JSON.stringify(summarizeResponse(result)));
-    throw new Error('登录失败，请检查手机号与验证码');
+    throw new Error('登录失败' + (hint ? '：' + hint : '，请检查手机号与验证码'));
   }
 
   /* ================================================================== *
    *  9. 菜单与入口
    * ================================================================== */
 
-  /** 没有账号时：日志 + 系统通知，把用户带到登录入口 */
+  /**
+   * 没有账号时：日志 + 系统通知，把用户带到登录入口
+   */
   function notifyLoginGuide() {
-    log('还没有配置任何账号，三种登录方式任选一种：');
+    log('还没有配置任何账号，两种登录方式任选一种：');
     log('  ① 扫码登录：点浏览器工具栏的 ScriptCat 图标 → 找到本脚本 → 菜单「① 扫码登录」');
-    log('  ② 手机号登录：先在脚本配置里填「手机号」，再点菜单「② 发送短信验证码」');
+    log('  ② 手机号登录：菜单「② 发送短信验证码」→ 在弹出的输入框里填手机号 →');
+    log('     收到短信后点菜单「③ 手机号登录」，在输入框里填验证码（手机号会记住，不用重复填）');
     log('  ③ 手动粘贴：在脚本配置里把账号列表填成 [{"userid":"...","token":"..."}]');
     var notify = GM('GM_notification');
     if (!notify) return;
@@ -2260,43 +2340,60 @@ return (function () {
 
   function registerMenus() {
     var register = GM('GM_registerMenuCommand');
-    if (!register) return;
+    var registerInput = GM('CAT_registerMenuInput');
 
-    var menus = [
-      ['① 扫码登录（新增账号）', function () {
-        return qrLogin().catch(function (e) { log('[失败] ' + ((e && e.message) || e)); });
-      }, 'kg-qr-login'],
-      ['② 发送短信验证码', function () {
-        return sendSmsCode().catch(function (e) { log('[失败] ' + ((e && e.message) || e)); });
-      }, 'kg-send-sms'],
-      ['③ 手机号登录', function () {
-        return phoneLogin().catch(function (e) { log('[失败] ' + ((e && e.message) || e)); });
-      }, 'kg-phone-login'],
-      ['④ 立即签到（不等定时）', function () {
-        log('手动触发签到...');
-        return runSign()
-          .then(function () { log('[完成] 手动签到结束'); })
-          .catch(function (e) { log('[失败] ' + ((e && e.message) || e)); });
-      }, 'kg-run-now'],
-      ['⑤ 查看当前账号', function () {
-        var info = readUsers();
-        if (!info.users.length) { log('当前没有任何账号'); notifyLoginGuide(); return; }
-        log('当前共 ' + info.users.length + ' 个账号：');
-        info.users.forEach(function (u, i) {
-          log('  ' + (i + 1) + '. userid=' + maskIdentifier(u.userid) + '  token=' + maskIdentifier(u.token));
-        });
-      }, 'kg-list-users'],
-      ['⑥ 清空本地账号', function () {
-        gmSet(KEY_SNAPSHOT, []);
-        gmSet(KEY_SYNC, '[]');
-        gmSet('账号.USERINFO', '[]');
-        log('已清空本地保存的账号（配置里的账号列表也一并清空）');
-      }, 'kg-clear-users'],
-    ];
+    /**
+     * 优先用脚本猫的「带输入框的菜单」（CAT_registerMenuInput），
+     * 这样手机号 / 验证码可以直接在弹出层里输入，不用来回改脚本配置。
+     * 老版本或其它管理器没有这个 API 时，自动退回普通菜单（改从配置读）。
+     */
+    function add(name, fn, id, inputOptions) {
+      if (inputOptions && registerInput) {
+        try {
+          registerInput(name, fn, Object.assign({ id: id }, inputOptions));
+          return;
+        } catch (e) { /* 退回普通菜单 */ }
+      }
+      if (!register) return;
+      try { register(name, fn, { id: id }); } catch (e) { /* 老版本管理器可能不支持，忽略 */ }
+    }
 
-    menus.forEach(function (item) {
-      try { register(item[0], item[1], { id: item[2] }); } catch (e) { /* 老版本管理器可能不支持，忽略 */ }
-    });
+    var hasInput = Boolean(registerInput);
+
+    add('① 扫码登录（新增账号）', function () {
+      return qrLogin().catch(function (e) { log('[失败] ' + ((e && e.message) || e)); });
+    }, 'kg-qr-login');
+
+    add(hasInput ? '② 发送短信验证码（填写手机号）' : '② 发送短信验证码（用配置里的手机号）', function (inputValue) {
+      return sendSmsCode(inputValue).catch(function (e) { log('[失败] ' + ((e && e.message) || e)); });
+    }, 'kg-send-sms', { inputType: 'text', inputLabel: '手机号', inputPlaceholder: '11 位手机号' });
+
+    add(hasInput ? '③ 手机号登录（填写验证码）' : '③ 手机号登录（用配置里的验证码）', function (inputValue) {
+      return phoneLogin(inputValue).catch(function (e) { log('[失败] ' + ((e && e.message) || e)); });
+    }, 'kg-phone-login', { inputType: 'text', inputLabel: '短信验证码', inputPlaceholder: '收到的验证码' });
+
+    add('④ 立即签到（不等定时）', function () {
+      log('手动触发签到...');
+      return runSign()
+        .then(function () { log('[完成] 手动签到结束'); })
+        .catch(function (e) { log('[失败] ' + ((e && e.message) || e)); });
+    }, 'kg-run-now');
+
+    add('⑤ 查看当前账号', function () {
+      var info = readUsers();
+      if (!info.users.length) { log('当前没有任何账号'); notifyLoginGuide(); return; }
+      log('当前共 ' + info.users.length + ' 个账号：');
+      info.users.forEach(function (u, i) {
+        log('  ' + (i + 1) + '. userid=' + maskIdentifier(u.userid) + '  token=' + maskIdentifier(u.token));
+      });
+    }, 'kg-list-users');
+
+    add('⑥ 清空本地账号', function () {
+      gmSet(KEY_SNAPSHOT, []);
+      gmSet(KEY_SYNC, '[]');
+      gmSet('账号.USERINFO', '[]');
+      log('已清空本地保存的账号（配置里的账号列表也一并清空）');
+    }, 'kg-clear-users');
   }
 
   async function runScheduled() {
@@ -2334,7 +2431,9 @@ return (function () {
       aesDecryptBlock: aesDecryptBlock, aesMul: aesMul, gfMul: gfMul,
       readUsers: readUsers, saveUsers: saveUsers, runSign: runSign,
       sendNotify: sendNotify, notifyChannels: notifyChannels,
-      resolveGM: GM,
+      resolveGM: GM, registerMenus: registerMenus,
+      sendSmsCode: sendSmsCode, phoneLogin: phoneLogin, errorTextOf: errorTextOf,
+      summarizeResponse: summarizeResponse, KEY_PHONE: KEY_PHONE, maskPhone: maskPhone,
     });
     return new Promise(function (resolve) { resolve('test'); });
   }

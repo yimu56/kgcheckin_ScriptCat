@@ -59,17 +59,29 @@ function nodeXhr(options) {
  * @param {Function} [opts.xhr] 自定义 GM_xmlhttpRequest 实现
  * @param {boolean} [opts.injectAsScope] 模拟脚本猫的真实注入方式：
  *   GM_* 只存在于脚本的作用域里，不挂在 globalThis 上（这正是脚本里那个坑）。
+ * @param {boolean} [opts.menuInput] 是否提供 CAT_registerMenuInput（带输入框的菜单）。
+ *   默认 true —— 模拟新版脚本猫；传 false 则模拟老版本/其它管理器。
  */
 function loadScript(opts = {}) {
   const src = fs.readFileSync(SCRIPT_PATH, 'utf8');
   let api = null;
   const store = new Map(Object.entries(opts.store || {}));
   const logs = [];
+  const menus = [];
   const xhr = opts.xhr || nodeXhr;
+  const withMenuInput = opts.menuInput !== false;
 
   const gmLog = (m) => {
     logs.push(String(m));
     if (opts.verbose) console.log('  · ' + m);
+  };
+  const gmRegister = (name, listener, options) => {
+    menus.push({ api: 'GM_registerMenuCommand', name, listener, options: options || {} });
+    return menus.length;
+  };
+  const catRegisterInput = (name, listener, options) => {
+    menus.push({ api: 'CAT_registerMenuInput', name, listener, options: options || {} });
+    return menus.length;
   };
 
   const sandbox = {
@@ -106,13 +118,16 @@ function loadScript(opts = {}) {
     sandbox.__store__ = store;
     sandbox.__xhr__ = xhr;
     sandbox.__gmLog__ = gmLog;
+    sandbox.__gmRegister__ = gmRegister;
+    sandbox.__catRegisterInput__ = catRegisterInput;
     const prelude = [
       'const GM_log = globalThis.__gmLog__;',
       'const GM_getValue = (k, d) => (globalThis.__store__.has(k) ? globalThis.__store__.get(k) : d);',
       'const GM_setValue = (k, v) => { globalThis.__store__.set(k, v); };',
       'const GM_deleteValue = (k) => { globalThis.__store__.delete(k); };',
       'const GM_notification = () => {};',
-      'const GM_registerMenuCommand = () => {};',
+      'const GM_registerMenuCommand = globalThis.__gmRegister__;',
+      withMenuInput ? 'const CAT_registerMenuInput = globalThis.__catRegisterInput__;' : '',
       'const GM_openInTab = () => {};',
       'const GM_xmlhttpRequest = globalThis.__xhr__;',
       '',
@@ -128,7 +143,8 @@ function loadScript(opts = {}) {
       store.delete(k);
     };
     sandbox.GM_notification = () => {};
-    sandbox.GM_registerMenuCommand = () => {};
+    sandbox.GM_registerMenuCommand = gmRegister;
+    if (withMenuInput) sandbox.CAT_registerMenuInput = catRegisterInput;
     sandbox.GM_openInTab = () => {};
     sandbox.GM_xmlhttpRequest = xhr;
     wrapped = `(function(){\n${src}\n})()`;
@@ -138,7 +154,7 @@ function loadScript(opts = {}) {
   const promise = vm.runInContext(wrapped, context, { filename: 'kgcheckin.user.js' });
 
   if (!api) throw new Error('脚本没有导出测试钩子（__KG_TEST_HOOK__ 未生效）');
-  return { api, promise, store, logs, sandbox, context };
+  return { api, promise, store, logs, menus, sandbox, context };
 }
 
 module.exports = { loadScript, SCRIPT_PATH, nodeXhr };

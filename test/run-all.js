@@ -15,3 +15,5 @@ console.log('');
 require('./notify.test.js');
 console.log('');
 require('./gm.test.js');
+console.log('');
+require('./login.test.js');

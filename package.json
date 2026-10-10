@@ -10,6 +10,7 @@
     "test:qr": "node test/qr.test.js",
     "test:notify": "node test/notify.test.js",
     "test:gm": "node test/gm.test.js",
+    "test:login": "node test/login.test.js",
     "test:live": "node test/live.test.js",
     "test:sign": "node test/sign.test.js"
   },
