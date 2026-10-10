@@ -110,9 +110,52 @@ const KEYS = {
     check('日志里标记了成功渠道', logs.some((l) => /飞书 发送成功/.test(l)), true);
   }
 
-  /* ---------- 4. 一个渠道都没配 ---------- */
+  /* ---------- 4. 云湖（开放接口 + token） ---------- */
 
-  console.log('\n4) 一个渠道都没配');
+  console.log('\n4) 云湖走开放接口');
+  {
+    const calls3 = [];
+    const { api, logs } = loadScript({
+      silent: true,
+      store: Object.assign({}, KEYS, {
+        '通知.YUNHU_BOT_TOKEN': 'yunhu-token-GGG',
+        '通知.YUNHU_RECV_ID': '7058262',
+        '通知.YUNHU_RECV_TYPE': 'user',
+      }),
+      xhr: recordingXhr(calls3),
+    });
+    await api.sendNotify('酷狗签到成功', '正文内容');
+
+    const yunhu = calls3.find((c) => c.url.includes('chat-go.jwzhd.com'));
+    check('云湖请求打到开放接口', !!yunhu, true);
+    check('云湖 token 拼在 query 上', /token=yunhu-token-GGG/.test(yunhu.url), true);
+    const body = JSON.parse(yunhu.data);
+    check('云湖 recvId 正确', body.recvId, '7058262');
+    check('云湖 recvType 正确', body.recvType, 'user');
+    check('云湖 contentType 为 text', body.contentType, 'text');
+    check('云湖正文带标题', body.content.text.includes('酷狗签到成功'), true);
+    check('云湖正文带内容', body.content.text.includes('正文内容'), true);
+    check('云湖发送成功', logs.some((l) => /云湖 发送成功/.test(l)), true);
+  }
+
+  /* ---------- 5. 云湖配了 token 但没填接收方 ---------- */
+
+  console.log('\n5) 云湖缺接收方 ID');
+  {
+    const calls4 = [];
+    const { api, logs } = loadScript({
+      silent: true,
+      store: Object.assign({}, KEYS, { '通知.YUNHU_BOT_TOKEN': 'yunhu-token-GGG' }),
+      xhr: recordingXhr(calls4),
+    });
+    await api.sendNotify('标题', '内容');
+    check('没有发出云湖请求', calls4.some((c) => c.url.includes('chat-go.jwzhd.com')), false);
+    check('日志里给出缺 ID 提示', logs.some((l) => /云湖 发送失败.*未填写接收方 ID/.test(l)), true);
+  }
+
+  /* ---------- 6. 一个渠道都没配 ---------- */
+
+  console.log('\n6) 一个渠道都没配');
   {
     const { api, logs } = loadScript({ silent: true, store: { '通知.KG_NOTIFY_SYSTEM': false } });
     await api.sendNotify('标题', '内容');

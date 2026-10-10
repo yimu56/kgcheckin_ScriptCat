@@ -203,12 +203,17 @@ ScriptCat 面板里点脚本的「配置」按钮即可编辑，分四组。
 | 企业微信机器人 | 企业微信机器人 key |
 | 钉钉机器人 | 钉钉机器人 access_token（加签方式再加「钉钉加签密钥」） |
 | 飞书机器人 | 飞书机器人 key |
-| 云湖机器人 | 云湖机器人 key |
+| 云湖机器人 | 云湖机器人 token + 接收方 ID + 接收方类型 |
 | Server酱 | Server酱 SendKey |
 | PushPlus | PushPlus token（可加群组编码） |
 | Telegram | 机器人 token + chat_id |
 | Bark | Bark key 或完整推送地址（可加分组） |
 | Discord | Webhook 地址 |
+
+> 云湖机器人走的是官方开放接口 `chat-go.jwzhd.com/open-apis/v1/bot/send`，
+> 需要三项：**token**、**接收方 ID**、**接收方类型**（`user` 或 `group`）。
+> token 在云湖控制台的「机器人发送消息链接」里，形如 `.../bot/send?token=xxxx`，取 `token=` 后那串；
+> 接收方 ID 发给用户填 userId，发到群填 groupId；接收方类型填 `user` 或 `group`。
 
 ## 四、常见问题
 

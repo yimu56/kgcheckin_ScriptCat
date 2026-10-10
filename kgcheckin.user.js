@@ -22,6 +22,7 @@
 // @connect      feishu.cn
 // @connect      dingtalk.com
 // @connect      yhchat.com
+// @connect      jwzhd.com
 // @connect      ftqq.com
 // @connect      pushplus.plus
 // @connect      telegram.org
@@ -112,10 +113,20 @@
     title: 飞书机器人 key
     type: text
     default: ''
-  YUNHU_BOT_KEY:
-    title: 云湖机器人 key
+  YUNHU_BOT_TOKEN:
+    title: 云湖机器人 token
+    description: 云湖控制台里机器人发送消息链接中 token= 后面那串
     type: text
     default: ''
+  YUNHU_RECV_ID:
+    title: 云湖接收方 ID
+    description: 发给用户填 userId，发到群填 groupId
+    type: text
+    default: ''
+  YUNHU_RECV_TYPE:
+    title: 云湖接收方类型
+    type: text
+    default: user
   SERVERCHAN_SENDKEY:
     title: Server酱 SendKey
     type: text
@@ -1712,7 +1723,9 @@ return (function () {
     '通知.DINGTALK_BOT_KEY': '',
     '通知.DINGTALK_SECRET': '',
     '通知.FEISHU_BOT_KEY': '',
-    '通知.YUNHU_BOT_KEY': '',
+    '通知.YUNHU_BOT_TOKEN': '',
+    '通知.YUNHU_RECV_ID': '',
+    '通知.YUNHU_RECV_TYPE': 'user',
     '通知.SERVERCHAN_SENDKEY': '',
     '通知.PUSHPLUS_TOKEN': '',
     '通知.PUSHPLUS_TOPIC': '',
@@ -1903,12 +1916,21 @@ return (function () {
       if (data.code !== undefined && data.code !== 0) throw new Error(data.msg || 'code=' + data.code);
     }]);
 
-    var yunhuKey = cfgStr('通知.YUNHU_BOT_KEY');
-    if (yunhuKey) list.push(['云湖', async function () {
-      var res = await postJson('https://www.yhchat.com/bot/send?key=' + encodeURIComponent(yunhuKey), {
-        msg: { text: title + '\n\n' + content },
+    var yunhuToken = cfgStr('通知.YUNHU_BOT_TOKEN');
+    if (yunhuToken) list.push(['云湖', async function () {
+      var recvId = cfgStr('通知.YUNHU_RECV_ID');
+      if (!recvId) throw new Error('未填写接收方 ID');
+      var recvType = cfgStr('通知.YUNHU_RECV_TYPE') || 'user';
+      if (recvType !== 'user' && recvType !== 'group') recvType = 'user';
+      var res = await postJson('https://chat-go.jwzhd.com/open-apis/v1/bot/send?token=' + encodeURIComponent(yunhuToken), {
+        recvId: String(recvId),
+        recvType: recvType,
+        contentType: 'text',
+        content: { text: title + '\n\n' + content },
       });
+      var data = parseBody(res.text) || {};
       if (res.status >= 400) throw new Error('HTTP ' + res.status);
+      if (data.code !== undefined && data.code !== 0) throw new Error(data.msg || 'code=' + data.code);
     }]);
 
     var serverchanKey = cfgStr('通知.SERVERCHAN_SENDKEY');
