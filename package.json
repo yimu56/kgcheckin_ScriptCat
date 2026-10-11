@@ -1,6 +1,6 @@
 {
   "name": "kgcheckin-scriptcat",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
   "description": "酷狗概念版 VIP 自动签到 · ScriptCat（脚本猫）定时脚本",
   "type": "commonjs",
@@ -8,6 +8,7 @@
     "test": "node test/run-all.js",
     "test:crypto": "node test/crypto.test.js",
     "test:qr": "node test/qr.test.js",
+    "test:userconfig": "node test/userconfig.test.js",
     "test:notify": "node test/notify.test.js",
     "test:gm": "node test/gm.test.js",
     "test:login": "node test/login.test.js",

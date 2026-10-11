@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         酷狗概念版 VIP 自动签到（ScriptCat 定时版）
 // @namespace    https://github.com/yimu56
-// @version      1.0.1
+// @version      1.0.2
 // @description  每天自动领取酷狗概念版 VIP：支持扫码 / 手机号 / 手动三种登录，支持系统通知与多渠道推送，零外部依赖
 // @author       yimu56
 // @license      MIT
@@ -44,7 +44,7 @@
     description: '打开 = 保留已有账号（同一 userid 只更新 token）；关闭 = 覆盖整个列表'
     type: checkbox
     default: true
----
+
 登录:
   KG_PHONE:
     title: 手机号
@@ -67,7 +67,7 @@
     description: '打开 = 额外用新标签页打开一张大二维码，更好扫；但扫码链接会发给第三方 api.qrserver.com。关闭 = 只用运行日志里的字符二维码（完全本地）'
     type: checkbox
     default: true
----
+
 签到:
   KG_CLAIM_TIMES:
     title: 每天最多领取次数
@@ -90,7 +90,7 @@
     default: 0
     min: -1
     max: 6
----
+
 通知:
   KG_NOTIFY_SYSTEM:
     title: 发送系统通知
@@ -1930,7 +1930,11 @@ return (function () {
       });
       var data = parseBody(res.text) || {};
       if (res.status >= 400) throw new Error('HTTP ' + res.status);
-      if (data.code !== undefined && data.code !== 0) throw new Error(data.msg || 'code=' + data.code);
+      // 云湖成功时返回 {"code":1,"msg":"success"}，这里的 1 是成功而不是错误码，
+      // 不能再按「code !== 0 即失败」判断，否则成功也会被记成失败。
+      if (data.code !== undefined && data.code !== 1 && data.code !== 0) {
+        throw new Error(data.msg || 'code=' + data.code);
+      }
     }]);
 
     var serverchanKey = cfgStr('通知.SERVERCHAN_SENDKEY');
@@ -1993,6 +1997,13 @@ return (function () {
     if (!channels.length && !jobs.length) {
       log('[通知] 没有配置任何通知渠道，跳过');
       return;
+    }
+
+    // 配置回显：只打印"填没填"，不打印密钥本身，方便定位是没配置还是发送失败
+    var channelNames = channels.map(function (c) { return c[0]; });
+    log('[通知] 已装载渠道：' + (channelNames.length ? channelNames.join('、') : '（无）'));
+    if (!channelNames.length) {
+      log('[通知] 提示：渠道开关由「云湖机器人 token」等配置项是否为空白决定，请确认已在脚本配置面板里填写并保存');
     }
 
     jobs = jobs.concat(channels);

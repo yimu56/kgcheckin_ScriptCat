@@ -33,12 +33,28 @@ function recordingXhr(calls, failOn) {
       if (shouldFail) {
         options.onerror && options.onerror({ error: 'stub failure' });
       } else {
+        // 各渠道成功响应的形状不一样，按域名给出最接近真实的一份，
+        // 避免用一个"万能响应"把渠道各自的成功判定逻辑掩盖过去。
+        let body;
+        if (options.url.includes('chat-go.jwzhd.com')) {
+          // 云湖：成功是 code:1，不是 code:0
+          body = { code: 1, data: { messageInfo: { msgId: 'stub-msg-id' } }, msg: 'success' };
+        } else if (options.url.includes('qyapi.weixin.qq.com') || options.url.includes('oapi.dingtalk.com')) {
+          body = { errcode: 0, errmsg: 'ok' };
+        } else if (options.url.includes('open.feishu.cn')) {
+          body = { code: 0, msg: 'success' };
+        } else if (options.url.includes('pushplus.plus')) {
+          body = { code: 200, msg: '请求成功' };
+        } else if (options.url.includes('api.telegram.org')) {
+          body = { ok: true };
+        } else {
+          body = { code: 0, ok: true };
+        }
         options.onload &&
           options.onload({
             status: 200,
             responseHeaders: 'content-type: application/json',
-            // 各渠道的成功响应形状不一样，这里给一个"全都满意"的响应
-            responseText: JSON.stringify({ errcode: 0, code: 0, ok: true }),
+            responseText: JSON.stringify(body),
           });
       }
     }, 0);
@@ -160,6 +176,69 @@ const KEYS = {
     const { api, logs } = loadScript({ silent: true, store: { '通知.KG_NOTIFY_SYSTEM': false } });
     await api.sendNotify('标题', '内容');
     check('提示没有配置渠道', logs.some((l) => /没有配置任何通知渠道/.test(l)), true);
+  }
+
+  /* ---------- 7. 云湖成功码语义（回归） ---------- */
+
+  console.log('\n7) 云湖返回 code:1 视为成功');
+  {
+    // 真实接口成功时返回 {"code":1,"msg":"success"}；
+    // 早期实现按「code !== 0 即失败」判断，导致成功也被记成失败。
+    const yunhuOk = (calls5) =>
+      function (options) {
+        calls5.push({ url: options.url });
+        setTimeout(() => {
+          options.onload &&
+            options.onload({
+              status: 200,
+              responseHeaders: 'content-type: application/json',
+              responseText: JSON.stringify({ code: 1, data: { messageInfo: { msgId: 'abc' } }, msg: 'success' }),
+            });
+        }, 0);
+      };
+
+    const calls5 = [];
+    const { api, logs } = loadScript({
+      silent: true,
+      store: Object.assign({}, KEYS, {
+        '通知.YUNHU_BOT_TOKEN': 'yunhu-token-GGG',
+        '通知.YUNHU_RECV_ID': '8142678',
+        '通知.YUNHU_RECV_TYPE': 'user',
+      }),
+      xhr: yunhuOk(calls5),
+    });
+    await api.sendNotify('标题', '内容');
+    check('code:1 判定为发送成功', logs.some((l) => /云湖 发送成功/.test(l)), true);
+    check('不会误报失败', logs.some((l) => /云湖 发送失败/.test(l)), false);
+  }
+
+  console.log('\n8) 云湖真实失败码要报错');
+  {
+    const yunhuFail = (calls6) =>
+      function (options) {
+        calls6.push({ url: options.url });
+        setTimeout(() => {
+          options.onload &&
+            options.onload({
+              status: 200,
+              responseHeaders: 'content-type: application/json',
+              responseText: JSON.stringify({ code: 1001, msg: 'token 无效' }),
+            });
+        }, 0);
+      };
+
+    const calls6 = [];
+    const { api, logs } = loadScript({
+      silent: true,
+      store: Object.assign({}, KEYS, {
+        '通知.YUNHU_BOT_TOKEN': 'bad-token',
+        '通知.YUNHU_RECV_ID': '8142678',
+        '通知.YUNHU_RECV_TYPE': 'user',
+      }),
+      xhr: yunhuFail(calls6),
+    });
+    await api.sendNotify('标题', '内容');
+    check('非成功码判定失败', logs.some((l) => /云湖 发送失败.*token 无效/.test(l)), true);
   }
 
   console.log(`\n通知渠道：${pass} 项通过，${fail} 项失败`);
