@@ -14,6 +14,8 @@ require('./qr.test.js');
 console.log('');
 require('./userconfig.test.js');
 console.log('');
+require('./schedule.test.js');
+console.log('');
 require('./notify.test.js');
 console.log('');
 require('./gm.test.js');

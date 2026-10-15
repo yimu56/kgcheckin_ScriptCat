@@ -88,6 +88,8 @@ const DEFAULT_CONFIG = {
   '签到.KG_CLAIM_TIMES': 8,
   '签到.KG_CLAIM_INTERVAL': 30,
   '签到.KG_REFRESH_WEEKDAY': 0,
+  '签到.KG_RANDOM_DELAY_MIN': 1,
+  '签到.KG_RANDOM_DELAY_MAX': 60,
   '通知.KG_NOTIFY_SYSTEM': true,
   '通知.WECOM_BOT_KEY': '',
   '通知.DINGTALK_BOT_KEY': '',

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         酷狗概念版 VIP 自动签到（ScriptCat 定时版）
 // @namespace    https://github.com/yimu56
-// @version      1.0.2
-// @description  每天自动领取酷狗概念版 VIP：支持扫码 / 手机号 / 手动三种登录，支持系统通知与多渠道推送，零外部依赖
+// @version      1.0.3
+// @description  每天自动领取酷狗概念版 VIP：支持扫码 / 手机号 / 手动三种登录，启动后随机延迟签到，支持系统通知与多渠道推送，零外部依赖
 // @author       yimu56
 // @license      MIT
 // @homepageURL  https://github.com/yimu56/kgcheckin_ScriptCat
@@ -90,6 +90,22 @@
     default: 0
     min: -1
     max: 6
+  KG_RANDOM_DELAY_MIN:
+    title: 启动后随机延迟下限
+    description: '定时触发后先随机等待一段时间再签到，避免每天落在同一时刻。下限填 0 表示允许立刻开始；上下限都填 0 即关闭随机延迟，恢复成触发后立即签到'
+    type: number
+    default: 1
+    min: 0
+    max: 720
+    unit: 分钟
+  KG_RANDOM_DELAY_MAX:
+    title: 启动后随机延迟上限
+    description: '随机等待的上限，实际等待时间在下限与上限之间随机取整数分钟。上限小于下限时自动互换'
+    type: number
+    default: 60
+    min: 0
+    max: 720
+    unit: 分钟
 
 通知:
   KG_NOTIFY_SYSTEM:
@@ -220,6 +236,35 @@ return (function () {
     return new Promise(function (resolve) { setTimeout(resolve, ms); });
   }
 
+  /**
+   * 抽一个「触发后先等多久再签到」的随机延迟。
+   *
+   * 定时脚本的 @crontab 命中的是时间窗里的第一个时刻（`* 1-6 once * *` 落在
+   * 01:00:00），签到时刻每天雷同，时间特征过于规整。这里在触发后先随机等一段
+   * 时间，把签到时刻打散。
+   *
+   * @param {number} minMinutes 延迟下限（分钟），非法值按 0 处理
+   * @param {number} maxMinutes 延迟上限（分钟），非法值按 0 处理；小于下限时互换
+   * @param {Function} [rand] 随机数发生器，默认 Math.random（测试时注入固定值）
+   * @returns {number} 延迟毫秒数；参数无效或上下限都为 0 时返回 0
+   */
+  function pickRandomDelayMs(minMinutes, maxMinutes, rand) {
+    var lo = Math.floor(Number(minMinutes));
+    var hi = Math.floor(Number(maxMinutes));
+    if (!Number.isFinite(lo) || lo < 0) lo = 0;
+    if (!Number.isFinite(hi) || hi < 0) hi = 0;
+    if (hi < lo) { var swap = lo; lo = hi; hi = swap; }
+    if (hi <= 0) return 0;
+
+    var r = typeof rand === 'function' ? Number(rand()) : Math.random();
+    if (!Number.isFinite(r) || r < 0) r = 0;
+    if (r >= 1) r = 0.999999999;
+
+    // 在闭区间 [lo, hi] 里取整数分钟
+    var minutes = Math.min(hi, lo + Math.floor(r * (hi - lo + 1)));
+    return minutes * 60000;
+  }
+
   /** 北京时间（不依赖本机时区设置错误） */
   function beijingNow() {
     var now = new Date();
@@ -234,6 +279,16 @@ return (function () {
       String(d.getMonth() + 1).padStart(2, '0') +
       '-' +
       String(d.getDate()).padStart(2, '0')
+    );
+  }
+
+  function formatClock(d) {
+    return (
+      String(d.getHours()).padStart(2, '0') +
+      ':' +
+      String(d.getMinutes()).padStart(2, '0') +
+      ':' +
+      String(d.getSeconds()).padStart(2, '0')
     );
   }
 
@@ -1718,6 +1773,8 @@ return (function () {
     '签到.KG_CLAIM_TIMES': 8,
     '签到.KG_CLAIM_INTERVAL': 30,
     '签到.KG_REFRESH_WEEKDAY': 0,
+    '签到.KG_RANDOM_DELAY_MIN': 1,
+    '签到.KG_RANDOM_DELAY_MAX': 60,
     '通知.KG_NOTIFY_SYSTEM': true,
     '通知.WECOM_BOT_KEY': '',
     '通知.DINGTALK_BOT_KEY': '',
@@ -2429,11 +2486,37 @@ return (function () {
     }, 'kg-clear-users');
   }
 
+  /**
+   * 定时触发后的随机等待，把签到时刻从固定的窗口起点打散。
+   *
+   * 只作用于定时任务；菜单里的「④ 立即签到」直接调用 runSign，不受影响。
+   *
+   * @returns {Promise<number>} 实际等待的毫秒数（0 表示没有等待）
+   */
+  async function waitRandomDelay() {
+    var minMin = cfgInt('签到.KG_RANDOM_DELAY_MIN', 1);
+    var maxMin = cfgInt('签到.KG_RANDOM_DELAY_MAX', 60);
+    var ms = pickRandomDelayMs(minMin, maxMin);
+
+    if (!ms) {
+      log('[信息] 随机延迟为 0，触发后立即开始签到');
+      return 0;
+    }
+
+    var at = new Date(beijingNow().getTime() + ms);
+    var minutes = Math.round((ms / 60000) * 10) / 10;
+    log('[信息] 随机等待 ' + minutes + ' 分钟再签到（预计 ' + formatClock(at) + ' 开始）');
+    log('[提示] 等待时长来自配置「签到」组的「启动后随机延迟下限 / 上限」，都填 0 即可关闭');
+    await delay(ms);
+    return ms;
+  }
+
   async function runScheduled() {
     log('==============================');
     log('定时任务启动');
     log('==============================');
     try {
+      await waitRandomDelay();
       await runSign();
       return 'ok';
     } catch (e) {
@@ -2467,6 +2550,8 @@ return (function () {
       resolveGM: GM, registerMenus: registerMenus,
       sendSmsCode: sendSmsCode, phoneLogin: phoneLogin, errorTextOf: errorTextOf,
       summarizeResponse: summarizeResponse, KEY_PHONE: KEY_PHONE, maskPhone: maskPhone,
+      pickRandomDelayMs: pickRandomDelayMs, waitRandomDelay: waitRandomDelay,
+      runScheduled: runScheduled, formatClock: formatClock,
     });
     return new Promise(function (resolve) { resolve('test'); });
   }
